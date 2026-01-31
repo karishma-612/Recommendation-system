@@ -1,66 +1,102 @@
 import pandas as pd
-from sklearn.metrics.pairwise import cosine_similarity
 import numpy as np
-
-# Function to recommend books and music
-def recommendations(user_id, num_recom=7, cat="Books"):
-    if cat == "Books":
-        if user_id not in user_b_r.index:
-            print(f"User ID {user_id} not found in the dataset.")
-            return []
-        
-        user_ratings = user_b_r.loc[user_id]
-        user_s_df = user_s_b_df
-    elif cat == "Music":
-        if user_id not in user_music_r.index:
-            print(f"User ID {user_id} not found in the dataset.")
-            return []
-        
-        user_ratings = user_music_r.loc[user_id]
-        user_s_df = user_s_music_df
-    else:
-        return []
-
-    common_books = user_ratings.index.intersection(user_s_df.columns)
-    w_ratings = user_s_df[common_books].loc[user_id].values * user_ratings[common_books].values
-    
-    # Handle zero division and replace NaN with zero
-    total_user_s_ratings = user_s_df[common_books].loc[user_id].sum()
-    recomm_score = 0.0 if total_user_s_ratings == 0 else w_ratings.sum() / total_user_s_ratings
-    
+from sklearn.metrics.pairwise import cosine_similarity
+def build_user_item_matrix(df, user_col, item_col, rating_col):
+    matrix = df.pivot_table(
+        index=user_col,
+        columns=item_col,
+        values=rating_col,
+        aggfunc="mean"
+    ).fillna(0)
+    return matrix
+def compute_user_similarity(user_item_matrix):
+    similarity = cosine_similarity(user_item_matrix)
+    return pd.DataFrame(
+        similarity,
+        index=user_item_matrix.index,
+        columns=user_item_matrix.index
+    )
+def recommend_items(
+    user_id,
+    user_item_matrix,
+    user_similarity_df,
+    top_k_users=5,
+    top_n_items=7
+):
+    if user_id not in user_item_matrix.index:
+        raise ValueError(f"User ID {user_id} not found in dataset.")
+    similar_users = (
+        user_similarity_df[user_id]
+        .drop(user_id)
+        .sort_values(ascending=False)
+        .head(top_k_users)
+    )
+    user_ratings = user_item_matrix.loc[user_id]
     unrated_items = user_ratings[user_ratings == 0].index
-    recomm = recomm_score * (user_ratings == 0).astype(int)
-    recomm = recomm[unrated_items].sort_values(ascending=False).head(num_recom)
-    return recomm.index
 
-# For Books
-b = pd.read_csv("C:\\Users\\Lenovo\\Desktop\\Recommendation System\\Books.csv")
-b_r = pd.read_csv("C:\\Users\\Lenovo\\Desktop\\Recommendation System\\Ratings.csv")
-br = pd.merge(b, b_r, on="bookID")
-br['Book-Rating'] = pd.to_numeric(br['Book-Rating'], errors='coerce')
-br = br[br['Book-Rating'].notna()]
-user_b_r = br.pivot_table(index="User-ID", columns="Book-Title", values="Book-Rating", aggfunc='mean')
-user_b_r = user_b_r.fillna(0)
+    scores = {}
 
-user_s_b = cosine_similarity(user_b_r)
-user_s_b_df = pd.DataFrame(user_s_b, index=user_b_r.index, columns=user_b_r.index)
+    for item in unrated_items:
+        weighted_sum = 0
+        sim_sum = 0
 
-# For Music
-music = pd.read_csv("C:\\Users\\Lenovo\\Desktop\\Recommendation System\\Music.csv")
-ratings = pd.read_csv("C:\\Users\\Lenovo\\Desktop\\Recommendation System\\Music_Ratings.csv")
-music_r = pd.merge(music, ratings, on="Title")
-user_music_r = music_r.pivot_table(index="UserID", columns="Title", values="Ratings")
-user_music_r = user_music_r.fillna(0)
+        for sim_user, sim_score in similar_users.items():
+            rating = user_item_matrix.loc[sim_user, item]
+            if rating > 0:
+                weighted_sum += sim_score * rating
+                sim_sum += sim_score
 
-user_s_music = cosine_similarity(user_music_r)
-user_s_music_df = pd.DataFrame(user_s_music, index=user_music_r.index, columns=user_music_r.index)
+        scores[item] = 0 if sim_sum == 0 else weighted_sum / sim_sum
+    recommendations = (
+        pd.Series(scores)
+        .sort_values(ascending=False)
+        .head(top_n_items)
+    )
 
-# Get recommendations for Books
-user_id_books = 23  # Example user_id
-recomm_books = recommendations(user_id_books, cat="Books")
-print(f"Recommended Books for User {user_id_books}:", recomm_books)
+    return recommendations
+books = pd.read_csv("C:/Users/Lenovo/Desktop/Recommendation System/Books.csv")
+book_ratings = pd.read_csv("C:/Users/Lenovo/Desktop/Recommendation System/Ratings.csv")
 
-# Get recommendations for Music
-user_id_music = 3  # Example user_id
-recomm_music = recommendations(user_id_music, cat="Music")
-print(f"Recommended Music for User {user_id_music}:", recomm_music)
+book_data = pd.merge(books, book_ratings, on="bookID")
+book_data["Book-Rating"] = pd.to_numeric(book_data["Book-Rating"], errors="coerce")
+book_data.dropna(inplace=True)
+
+user_book_matrix = build_user_item_matrix(
+    book_data,
+    user_col="User-ID",
+    item_col="Book-Title",
+    rating_col="Book-Rating"
+)
+
+book_user_similarity = compute_user_similarity(user_book_matrix)
+music = pd.read_csv("C:/Users/Lenovo/Desktop/Recommendation System/Music.csv")
+music_ratings = pd.read_csv("C:/Users/Lenovo/Desktop/Recommendation System/Music_Ratings.csv")
+
+music_data = pd.merge(music, music_ratings, on="Title")
+
+user_music_matrix = build_user_item_matrix(
+    music_data,
+    user_col="UserID",
+    item_col="Title",
+    rating_col="Ratings"
+)
+
+music_user_similarity = compute_user_similarity(user_music_matrix)
+user_id_books = 23
+book_recs = recommend_items(
+    user_id=user_id_books,
+    user_item_matrix=user_book_matrix,
+    user_similarity_df=book_user_similarity
+)
+
+print(f"\nRecommended Books for User {user_id_books}:")
+print(book_recs)
+user_id_music = 3
+music_recs = recommend_items(
+    user_id=user_id_music,
+    user_item_matrix=user_music_matrix,
+    user_similarity_df=music_user_similarity
+)
+
+print(f"\nRecommended Music for User {user_id_music}:")
+print(music_recs)
